@@ -34,6 +34,8 @@ exec(logic_source, ns)
 load_db = ns["load_db"]
 save_db = ns["save_db"]
 normalize_name = ns["normalize_name"]
+parse_types = ns["parse_types"]
+PasteDebouncer = ns["PasteDebouncer"]
 DEFAULT_TYPE = ns["DEFAULT_TYPE"]
 
 passed = 0
@@ -164,6 +166,33 @@ with open(test_db, "r", encoding="utf-8") as f:
     saved = json.load(f)
 check("save_db writes correctly", saved == {"test": ["RTF"]})
 check("no temp files left", not [f for f in os.listdir(tmpdir) if f.endswith(".tmp")])
+
+# --- Test 10: parse_types (comma-separated type input) ---
+print("Test parse_types:")
+check("single type", parse_types("RTF") == ["RTF"])
+check("comma-separated types", parse_types("RTF, PPTX") == ["RTF", "PPTX"])
+check("types with extra whitespace", parse_types("  RTF ,  PPTX  ") == ["RTF", "PPTX"])
+check("empty string returns []", parse_types("") == [])
+check("only commas returns []", parse_types(" , , ") == [])
+check("mixed empty entries skipped", parse_types("RTF,,PPTX") == ["RTF", "PPTX"])
+
+# --- Test 11: PasteDebouncer debounces duplicates but recovers ---
+# Regression test for a units bug: the debounce window (150 ms) was being
+# compared against time.monotonic() values in seconds, so 150 was treated
+# as 150 *seconds* and every subsequent paste was ignored as a "duplicate".
+print("Test PasteDebouncer:")
+d = PasteDebouncer(window_ms=150)
+check("window correctly converted to seconds", d.window_s == 0.15)
+check("first paste accepted", d.is_duplicate(now=1.00) is False)
+check("double-fire 50ms later ignored", d.is_duplicate(now=1.05) is True)
+# Key regression: a paste that arrives after the debounce window has elapsed
+# must be accepted again (it is NOT a duplicate of the earlier paste). With
+# the buggy units, now=1.20 would still be within the mistaken 150-second
+# window and pasting would silently stop working.
+check("paste 200ms after first accepted again", d.is_duplicate(now=1.20) is False)
+check("double-fire of recovered paste ignored", d.is_duplicate(now=1.25) is True)
+check("paste long after previous accepted again", d.is_duplicate(now=2.00) is False)
+check("empty window passes everything", PasteDebouncer(window_ms=0).is_duplicate(now=5.0) is False)
 
 print(f"\n=== {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)

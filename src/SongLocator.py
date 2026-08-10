@@ -35,6 +35,30 @@ BORDER_COLOR = "white"
 PASTE_DEBOUNCE_MS = 150
 
 
+class PasteDebouncer:
+    """Tracks paste timestamps to ignore duplicate <<Paste>> events.
+
+    Tk fires <<Paste>> twice when Caps Lock is on. This debouncer ignores
+    a second event that arrives within the debounce window.
+    """
+
+    def __init__(self, window_ms=PASTE_DEBOUNCE_MS):
+        self.window_s = window_ms / 1000.0
+        self._last = 0.0
+
+    def is_duplicate(self, now=None):
+        """Return True if this paste is a duplicate (within the window).
+
+        Pass `now` (seconds) for deterministic testing.
+        """
+        if now is None:
+            now = time.monotonic()
+        if now - self._last < self.window_s:
+            return True
+        self._last = now
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Storage
 # ---------------------------------------------------------------------------
@@ -134,39 +158,60 @@ def format_types(types):
     return ", ".join(types)
 
 
+def parse_types(raw):
+    """Split a comma-separated type string into a cleaned list of types.
+
+    Returns [] if the input is empty or contains only separators/whitespace.
+    """
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
 def add_song():
     name = normalize_name(name_entry.get())
-    song_type = type_entry.get().strip()
+    new_types = parse_types(type_entry.get())
 
     if not name:
         messagebox.showwarning("Missing info", "Enter a song name.")
         return
 
-    if not song_type:
-        song_type = DEFAULT_TYPE
+    if not new_types:
+        new_types = [DEFAULT_TYPE]
 
     reload_db()
     key = name.lower()
 
     if key not in db:
-        db[key] = [song_type]
-        message = f"Added: {name} -> {song_type}"
+        db[key] = list(new_types)
+        message = f"Added: {name} -> {format_types(db[key])}"
     else:
         types = db[key]
-        if song_type in types:
-            message = f'"{name}" already has type "{song_type}".'
-        elif DEFAULT_TYPE in types and song_type != DEFAULT_TYPE:
-            # Upgrade an "unset" entry to the newly entered type.
-            types.remove(DEFAULT_TYPE)
-            types.append(song_type)
-            message = f'Updated "{name}": {DEFAULT_TYPE} -> {song_type}'
-        elif song_type == DEFAULT_TYPE:
-            # Trying to add "unset" to a song that already has real types.
-            message = f'"{name}" already exists with types: {format_types(types)}'
+        added = []
+        skipped = []
+
+        for song_type in new_types:
+            if song_type in types:
+                skipped.append(song_type)
+            elif DEFAULT_TYPE in types and song_type != DEFAULT_TYPE:
+                # Upgrade an "unset" entry to the newly entered type.
+                types.remove(DEFAULT_TYPE)
+                types.append(song_type)
+                added.append(song_type)
+            elif song_type == DEFAULT_TYPE:
+                # Trying to add "unset" to a song that already has real types.
+                skipped.append(song_type)
+            else:
+                # A different type - keep both (a song can exist in multiple formats).
+                types.append(song_type)
+                added.append(song_type)
+
+        if added and skipped:
+            message = f'Added {format_types(added)} to "{name}". Skipped: {format_types(skipped)}. Types: {format_types(types)}'
+        elif added:
+            message = f'Added {format_types(added)} to "{name}". Types: {format_types(types)}'
+        elif skipped:
+            message = f'"{name}" already has: {format_types(types)}'
         else:
-            # A different type - keep both (a song can exist in multiple formats).
-            types.append(song_type)
-            message = f'Added type "{song_type}" to "{name}". Types: {format_types(types)}'
+            message = f'"{name}" unchanged. Types: {format_types(types)}'
 
     try:
         save_db(db)
@@ -291,14 +336,11 @@ def install_debounced_paste(widget):
     ignores a second paste event that arrives within PASTE_DEBOUNCE_MS and
     performs the insert itself.
     """
-    state = {"last": 0.0}
+    debouncer = PasteDebouncer()
 
     def on_paste(event):
-        now = time.monotonic()
-        if now - state["last"] < PASTE_DEBOUNCE_MS:
+        if debouncer.is_duplicate():
             return "break"  # duplicate paste event - ignore
-
-        state["last"] = now
 
         try:
             text = event.widget.clipboard_get()
@@ -330,7 +372,7 @@ name_entry = make_entry(root)
 install_debounced_paste(name_entry)
 name_entry.pack()
 
-make_label(root, text="Type (optional):").pack()
+make_label(root, text="Type (optional, comma-separated):").pack()
 type_entry = make_entry(root)
 install_debounced_paste(type_entry)
 type_entry.pack()
