@@ -26,6 +26,7 @@ DB_FILE = os.path.expanduser("~/song_locations.json")
 DEFAULT_TYPE = "unset"
 
 # --- Dark theme ---
+#shawn edit
 BG_COLOR = "#2b2b2b"
 FG_COLOR = "white"
 ENTRY_BG = "#3c3c3c"
