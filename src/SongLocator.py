@@ -18,6 +18,7 @@ import json
 import os
 import difflib
 import tempfile
+import time
 import tkinter as tk
 from tkinter import messagebox
 
@@ -29,6 +30,9 @@ BG_COLOR = "#2b2b2b"
 FG_COLOR = "white"
 ENTRY_BG = "#3c3c3c"
 BORDER_COLOR = "white"
+
+# Tk fires <<Paste>> twice when Caps Lock is on; ignore duplicates within this window.
+PASTE_DEBOUNCE_MS = 150
 
 
 # ---------------------------------------------------------------------------
@@ -273,10 +277,49 @@ def make_entry(parent, width=40):
 def make_button(parent, text, command):
     return tk.Button(
         parent, text=text, command=command,
-        bg=ENTRY_BG, fg=FG_COLOR,
+        fg=ENTRY_BG, bg=FG_COLOR,
         activebackground=ENTRY_BG, activeforeground=FG_COLOR,
         highlightbackground=BORDER_COLOR, highlightthickness=1,
     )
+
+
+def install_debounced_paste(widget):
+    """Replace the default paste with a debounced handler.
+
+    Tk has a known quirk where <<Paste>> fires twice when Caps Lock is on,
+    which caused song names to be doubled in the database. This handler
+    ignores a second paste event that arrives within PASTE_DEBOUNCE_MS and
+    performs the insert itself.
+    """
+    state = {"last": 0.0}
+
+    def on_paste(event):
+        now = time.monotonic()
+        if now - state["last"] < PASTE_DEBOUNCE_MS:
+            return "break"  # duplicate paste event - ignore
+
+        state["last"] = now
+
+        try:
+            text = event.widget.clipboard_get()
+        except tk.TclError:
+            return "break"  # clipboard empty or unavailable
+
+        w = event.widget
+        # Replace any current selection.
+        try:
+            w.delete("sel.first", "sel.last")
+        except tk.TclError:
+            pass
+
+        if isinstance(w, tk.Text):
+            w.insert("insert", text)
+        else:
+            w.insert(tk.INSERT, text)
+
+        return "break"  # prevent the default paste behavior
+
+    widget.bind("<<Paste>>", on_paste)
 
 
 # --- Add a single song ---
@@ -284,10 +327,12 @@ make_label(root, text="Add a song", font=("Helvetica", 12, "bold")).pack(pady=(1
 
 make_label(root, text="Song name:").pack()
 name_entry = make_entry(root)
+install_debounced_paste(name_entry)
 name_entry.pack()
 
 make_label(root, text="Type (optional):").pack()
 type_entry = make_entry(root)
+install_debounced_paste(type_entry)
 type_entry.pack()
 
 make_button(root, "Add", add_song).pack(pady=5)
@@ -303,12 +348,14 @@ bulk_text = tk.Text(
     highlightcolor=BORDER_COLOR,
     highlightthickness=1,
 )
+install_debounced_paste(bulk_text)
 bulk_text.pack()
 make_button(root, "Add All", add_bulk_titles).pack(pady=5)
 
 # --- Look up a song ---
 make_label(root, text="Look up a song", font=("Helvetica", 12, "bold")).pack(pady=(15, 0))
 lookup_entry = make_entry(root)
+install_debounced_paste(lookup_entry)
 lookup_entry.pack()
 make_button(root, "Search", lookup_song).pack(pady=5)
 
