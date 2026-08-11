@@ -76,7 +76,7 @@ CHORD_WORD_RE = re.compile(
     re.IGNORECASE,
 )
 SECTION_MARKER_RE = re.compile(
-    r'^\s*-?\s*\(?(?:CHORUSES?|REFRAINS?|VERSES?|BRIDGES?|INTROS?|ENDS?|REPEATS?)'
+    r'^\s*-?\s*\(?(?:CHORUS|CHORUSES|REFRAIN|REFRAINS|VERSE|VERSES|BRIDGE|BRIDGES|INTRO|INTROS|END|ENDS|REPEAT|REPEATS)'
     r'\.?:?\s*(?:I{1,3}V?|IV|V|VI{0,3}|[1-9]\d*)?\)?\s*-?\s*$'
     r'|^\s*-?\s*(I{1,3}V?|IV|V|VI{0,3})\s*-?\s*$',
     re.IGNORECASE,
