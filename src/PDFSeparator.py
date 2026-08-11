@@ -44,6 +44,8 @@ import shutil
 import subprocess
 import sys
 
+from typing import Any, List, Sequence, Tuple
+
 # Matches the recurring footer credit line at the START of a line only,
 # tolerating spacing/spelling variants seen in the source ("BLD Newark",
 # "BLD  Newark", "BLD Nwark"), with optional surrounding "+" and an
@@ -71,7 +73,24 @@ SKIP_KEYWORDS = ("reprint", "printed", "ccli", "praise ministry", "reprinted by"
 
 
 CHORD_WORD_RE = re.compile(
-    r'^[A-G](#|b)?(maj7?|min7?|m7?|dim7?|aug|sus[24]?|add[679]?|M7?9?13?|b[59]?|#[59]?|[79])*'
+    # Base: note name (A-G, optional #/b) followed by one or more suffix
+    # segments. Supported suffixes (case-insensitive overall, but m/M are
+    # deliberately kept case-distinct):
+    #   maj / maj7 / maj9        (maj13 is NOT matched)
+    #   min / min7
+    #   m / m7 / m9 / m13       (lowercase m only)
+    #   dim / dim7
+    #   aug
+    #   sus / sus2 / sus4
+    #   add / add9 / add11       (add13 is NOT matched)
+    #   M7 / M9 / M13           (uppercase M, digit required; bare M is NOT matched)
+    #   b5 / b9 / b13
+    #   #5 / #9
+    #   7 / 9 / 11 / 13
+    # Known gaps (not matched):
+    #   maj11, maj13, add13, M11, M, m11
+    r'^[A-G](#|b)?'
+    r'(?:maj7?|min7?|(?-i:m(?:7|9|13)?)|dim7?|aug|sus[24]?|add[679]?|(?-i:M(?:7|9|13))|b[59]?|#[59]?|[79])*'
     r'\d*(?:/(?:[A-G](#|b)?)?\d*)?$',
     re.IGNORECASE,
 )
@@ -163,7 +182,10 @@ def _is_chord_token(tok: str) -> bool:
     return _is_chord_only(tok)
 
 
-def _group_words_into_lines(words, tol: float = 2.0):
+def _group_words_into_lines(
+    words: Sequence[Tuple[float, float, float, float, str, ...]],
+    tol: float = 2.0,
+) -> List[List[Tuple[float, float, float, float, str, ...]]]:
     """Group PyMuPDF words (x0,y0,x1,y1,text,...) into visual lines by y."""
     ws = sorted(words, key=lambda w: (w[1], w[0]))
     lines = []
@@ -176,7 +198,10 @@ def _group_words_into_lines(words, tol: float = 2.0):
     return lines
 
 
-def _split_columns(words, gap_threshold: float = 60.0):
+def _split_columns(
+    words: List[Tuple[float, float, float, float, str, ...]],
+    gap_threshold: float = 60.0,
+) -> List[List[Tuple[float, float, float, float, str, ...]]]:
     """Split a page's words into left/right columns on a large horizontal gap."""
     if not words:
         return [words]
@@ -257,11 +282,19 @@ def pdf_to_text(pdf_path: str) -> str:
             file=sys.stderr,
         )
         sys.exit(1)
-    result = subprocess.run(
-        ["pdftotext", "-layout", pdf_path, "-"],
-        capture_output=True, text=True, check=True, timeout=60,
-    )
-    return result.stdout
+    try:
+        result = subprocess.run(
+            ["pdftotext", "-layout", pdf_path, "-"],
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        return result.stdout
+    except Exception as exc:
+        print(
+            f"pdftotext failed ({type(exc).__name__}: {exc}); "
+            "cannot extract text.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def sanitize_filename(name: str) -> str:
@@ -419,7 +452,7 @@ def write_rtf(path: str, title: str, body: str):
 def main():
     ap = argparse.ArgumentParser(description="Split this songbook PDF into per-song RTF files.")
     ap.add_argument("pdf_path")
-    ap.add_argument("--outdir", default="./songs")
+    ap.add_argument("--outdir", default=os.path.join(os.getcwd(), "songs"))
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--force", action="store_true",
                     help="overwrite existing RTF files instead of refusing")

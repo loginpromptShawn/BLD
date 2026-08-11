@@ -69,6 +69,10 @@ check("chord token b5 detected", P._is_chord_token("F#m7b5") is True)
 check("chord token #5 detected", P._is_chord_token("G#7#5") is True)
 check("lowercase multi-chord line is chord", P.is_chord_line("g                c") is True)
 check("lyric token not a chord", P._is_chord_token("THERE") is False)
+check("M7 chord token detected", P._is_chord_token("CM7") is True)
+check("M9 chord token detected", P._is_chord_token("CM9") is True)
+check("bare M is not a chord token", P._is_chord_token("CM") is False)
+check("M11 is not a chord token", P._is_chord_token("CM11") is False)
 words = [(10, 100, 20, 110, "F"), (30, 100, 40, 110, "Am7"), (10, 120, 25, 130, "THERE")]
 lines = P._group_words_into_lines(words)
 check("groups same-y words into one band", len(lines) == 2 and len(lines[0][1]) == 2)
@@ -255,6 +259,29 @@ else:
     check("no chord-only lines remain in any body", no_chords)
     check("no footer/credit lines remain in any body", footer_gone)
     print(f"  (detected {len(songs)} songs from {os.path.basename(pdf_path)})")
+
+# --- Edge cases ---
+print("Edge cases:")
+
+# Empty input → zero songs, no crash
+s_empty, _ = P.split_into_songs("")
+check("empty input yields zero songs", len(s_empty) == 0)
+
+# No footer in text → entire body treated as one song
+s_nofoot, _ = P.split_into_songs("STANDALONE SONG\nG  C\nLyrics.\n")
+check("no-footer text yields one song", len(s_nofoot) == 1 and s_nofoot[0]["title"] == "STANDALONE SONG")
+check("no-footer body keeps lyrics", "Lyrics." in s_nofoot[0]["body"])
+
+# pdf_to_text exits when both extractors are unavailable
+import unittest.mock as umock
+
+with umock.patch.object(P, "extract_text_pymupdf", side_effect=RuntimeError("boom")):
+    with umock.patch("subprocess.run", side_effect=FileNotFoundError("no pdftotext")):
+        try:
+            P.pdf_to_text("any.pdf")
+            check("no extractor available triggers sys.exit", False)
+        except SystemExit as e:
+            check("no extractor available triggers sys.exit", e.code == 1)
 
 print(f"\n=== {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)
