@@ -180,6 +180,11 @@ check("trailing credit lines stripped from body", "Reprinted by" not in s5[0]["b
      and "REPRINT JULY" not in s5[0]["body"])
 check("lyric kept, credit gone", "May the words of my mouth" in s5[0]["body"])
 
+# Symbol-only separator between title and chords is NOT absorbed
+t_sep = "MY TITLE\n---\nG  C\nLyrics here.\n"
+s_sep, _ = P.split_into_songs(t_sep)
+check("symbol-only line does not extend title", s_sep[0]["title"] == "MY TITLE")
+
 # --- RTF / write helpers ---
 print("RTF helpers:")
 check("escape_rtf escapes braces/backslash", P.escape_rtf("a{b}\\c") == "a\\{b\\}\\\\c")

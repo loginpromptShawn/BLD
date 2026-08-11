@@ -328,16 +328,18 @@ def split_into_songs(full_text: str):
 
         # Title collection: take the first line, then keep absorbing
         # further lines only while they're neither blank, nor a chord
-        # line, nor a section marker (CHORUS/VERSE/roman numeral/etc) --
-        # this lets genuine two-line titles (e.g. "ALIVE, ALIVE, ALIVE" /
+        # line, nor a section marker (CHORUS/VERSE/roman numeral/etc),
+        # nor a stray credit/reprint/page-number line -- this lets
+        # genuine two-line titles (e.g. "ALIVE, ALIVE, ALIVE" /
         # "FOREVERMORE") merge, while stopping before the song's chords
-        # start even when there's no blank line separating them.
+        # start or a separator/credit line intrudes.
         title_lines = [lines[idx].strip()]
         idx += 1
         while (
             idx < len(lines)
             and lines[idx].strip()
             and not is_chord_or_marker_line(lines[idx])
+            and not is_skip_line(lines[idx])
         ):
             title_lines.append(lines[idx].strip())
             idx += 1
