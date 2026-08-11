@@ -32,12 +32,15 @@ title, section labels (CHORUS/VERSE etc.) and the lyrics.
 
 REQUIREMENTS
 ------------
-    poppler-utils (pdftotext) must be installed and on PATH.
+    PyMuPDF (pymupdf) is recommended for layout-aware extraction:
+        pip install pymupdf
+    poppler-utils (pdftotext) is used as a fallback if PyMuPDF is absent.
 """
 
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -71,8 +74,8 @@ CHORD_WORD_RE = re.compile(
     r'^[A-G](#|b)?(maj7?|min7?|m7?|dim7?|aug|sus\d?|add\d?|M7?9?)*\d*(/[A-G](#|b)?\d*)?$'
 )
 SECTION_MARKER_RE = re.compile(
-    r'^(\(?(CHORUS|REFRAIN|VERSE|BRIDGE|INTRO|END|REPEAT)S?\.?:?\s*(I{1,3}V?|IV|V|VI{0,3})?\)?'
-    r'|I{1,3}V?|IV|V|VI{0,3})$',
+    r'^\s*-?\s*\(?(CHORUS|REFRAIN|VERSE|BRIDGE|INTRO|END|REPEAT)S?\.?:?\s*(I{1,3}V?|IV|V|VI{0,3})?\)?\s*-?\s*$'
+    r'|^\s*-?\s*(I{1,3}V?|IV|V|VI{0,3})\s*-?\s*$',
     re.IGNORECASE,
 )
 # A line made up of nothing but stray punctuation/symbols (extraction
@@ -235,11 +238,23 @@ def pdf_to_text(pdf_path: str) -> str:
     try:
         return extract_text_pymupdf(pdf_path)
     except ImportError:
-        result = subprocess.run(
-            ["pdftotext", "-layout", pdf_path, "-"],
-            capture_output=True, text=True, check=True,
+        pass
+
+    if not shutil.which("pdftotext"):
+        print(
+            "Could not extract text: neither PyMuPDF nor pdftotext "
+            "(poppler-utils) is available.\n"
+            "Install one with:  pip install pymupdf\n"
+            "   or (macOS):     brew install poppler\n"
+            "   or (Debian):    sudo apt install poppler-utils",
+            file=sys.stderr,
         )
-        return result.stdout
+        sys.exit(1)
+    result = subprocess.run(
+        ["pdftotext", "-layout", pdf_path, "-"],
+        capture_output=True, text=True, check=True,
+    )
+    return result.stdout
 
 
 def sanitize_filename(name: str) -> str:
@@ -264,15 +279,15 @@ FRONT_MATTER_KEYWORDS = (
 
 
 def looks_like_front_matter(title: str) -> bool:
-    """Heuristic: is this segment's title really a cover/contents page rather
-    than a song? Used to skip junk front matter that appears before the first
-    footer (e.g. a contents/title page) instead of turning it into a nonsense
-    'song'."""
+    """Heuristic: does this segment's first line look like a cover/contents
+    page rather than a song title? Used to skip junk front matter that
+    appears before the first footer.
+
+    We require an actual front-matter keyword rather than any long string,
+    so a legitimate (and possibly long) first-song title is never dropped.
+    """
     low = title.lower()
-    if any(kw in low for kw in FRONT_MATTER_KEYWORDS):
-        return True
-    # Real song titles are short; a long run of words is running text.
-    return len(title.split()) > 10
+    return any(kw in low for kw in FRONT_MATTER_KEYWORDS)
 
 
 def split_into_songs(full_text: str):
@@ -435,7 +450,7 @@ def main():
         write_rtf(out_path, song["title"], song["body"])
 
     print(f"Wrote {len(songs)} RTF file(s) to {args.outdir}/")
-#shawn
+
 
 if __name__ == "__main__":
     main()

@@ -43,6 +43,7 @@ check("slash chord is chord", P.is_chord_line("C/G") is True)
 check("plain lyric is not chord", P.is_chord_line("Amazing grace how sweet the sound") is False)
 check("section marker is not a removable chord", P.is_chord_line("CHORUS") is False)
 check("marker still ends a title block", P.is_chord_or_marker_line("VERSE") is True)
+check("dashed marker recognized", P.is_chord_or_marker_line("-VERSE -") is True)
 check("two-word hook is not a chord line", P.is_chord_line("Holy Forever") is False)
 
 # --- PyMuPDF layout helpers ---
@@ -62,8 +63,8 @@ check("keeps a narrow page as one column", len(onecol) == 1)
 # --- Front matter heuristic ---
 print("Front-matter heuristic:")
 check("contents page detected", P.looks_like_front_matter("SONGBOOK CONTENTS") is True)
-check("long paragraph detected", P.looks_like_front_matter(
-    "some very long run of words that is clearly not a song title at all") is True)
+check("long lyric-first line is NOT front matter", P.looks_like_front_matter(
+    "some very long run of words that is clearly not a song title at all") is False)
 check("normal song title not front matter", P.looks_like_front_matter("Amazing Grace") is False)
 
 # --- Filename helpers ---
