@@ -54,6 +54,8 @@ print("PyMuPDF layout helpers:")
 check("chord token detected", P._is_chord_token("F/A") is True)
 check("chord token (maj7) detected", P._is_chord_token("Cmaj7") is True)
 check("chord token (flat) detected", P._is_chord_token("Bb") is True)
+check("lowercase chord token detected", P._is_chord_token("am") is True)
+check("lowercase multi-chord line is chord", P.is_chord_line("g                c") is True)
 check("lyric token not a chord", P._is_chord_token("THERE") is False)
 words = [(10, 100, 20, 110, "F"), (30, 100, 40, 110, "Am7"), (10, 120, 25, 130, "THERE")]
 lines = P._group_words_into_lines(words)

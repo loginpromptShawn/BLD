@@ -71,7 +71,8 @@ SKIP_KEYWORDS = ("reprint", "printed", "ccli", "praise ministry", "reprinted by"
 
 
 CHORD_WORD_RE = re.compile(
-    r'^[A-G](#|b)?(maj7?|min7?|m7?|dim7?|aug|sus\d?|add\d?|M7?9?)*\d*(/[A-G](#|b)?\d*)?$'
+    r'^[A-G](#|b)?(maj7?|min7?|m7?|dim7?|aug|sus\d?|add\d?|M7?9?)*\d*(/[A-G](#|b)?\d*)?$',
+    re.IGNORECASE,
 )
 SECTION_MARKER_RE = re.compile(
     r'^\s*-?\s*\(?(?:CHORUSES?|REFRAINS?|VERSES?|BRIDGES?|INTROS?|ENDS?|REPEATS?)'
