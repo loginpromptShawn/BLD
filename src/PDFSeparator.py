@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-split_songs_v2.py
+PDFSeparator.py
 
 Splits this specific songbook-style PDF (chord charts + lyrics, one song
 after another) into individual RTF files, one per song.
@@ -24,8 +24,11 @@ song's title.
 
 USAGE
 -----
-    python3 split_songs_v2.py mysongs.pdf --dry-run
-    python3 split_songs_v2.py mysongs.pdf --outdir ./songs
+    python3 src/PDFSeparator.py mysongs.pdf --dry-run
+    python3 src/PDFSeparator.py mysongs.pdf --outdir ./songs
+
+Guitar-chord lines are removed from the output; each RTF holds only the
+title, section labels (CHORUS/VERSE etc.) and the lyrics.
 
 REQUIREMENTS
 ------------
@@ -38,9 +41,17 @@ import re
 import subprocess
 import sys
 
-# Matches the recurring footer credit line, tolerating spacing/spelling
-# variants seen in the source ("BLD Newark", "BLD  Newark", "BLD Nwark").
-FOOTER_RE = re.compile(r'\+\s*BLD\s+N\s*wark\s*\+|\+\s*BLD\s+Newark\s*\+', re.IGNORECASE)
+# Matches the recurring footer credit line at the START of a line only,
+# tolerating spacing/spelling variants seen in the source ("BLD Newark",
+# "BLD  Newark", "BLD Nwark"), with optional surrounding "+" and an
+# optional trailing credit/page-number suffix. Anchoring to a line start
+# stops a stray "+ BLD Newark +" snippet inside body lyrics from splitting
+# mid-song. (We deliberately don't anchor the end: -layout sometimes joins
+# the footer's trailing credit lines onto the same physical line.)
+FOOTER_RE = re.compile(
+    r'^\s*\+?\s*BLD\s+(?:N\s*wark|Newark)\s*\+?',
+    re.IGNORECASE | re.MULTILINE,
+)
 
 # A leftover page-number / disc-number line right after a footer, e.g.
 # "001 / DISC 1" or a bare "039".
@@ -69,6 +80,34 @@ SECTION_MARKER_RE = re.compile(
 SYMBOL_ONLY_RE = re.compile(r'^[\\/*.,;:!?\-–—\s]+$')
 
 
+def _is_chord_only(line_stripped: str) -> bool:
+    """True if every meaningful token in a line is a guitar-chord symbol.
+
+    Tokens that are pure separators/repeat counts ("x2", dashes) are ignored.
+    Requiring ALL meaningful tokens to be chords (rather than a majority
+    threshold) avoids misreading a lyric line -- e.g. a two-word chorus hook
+    -- as a chord line and ending a multi-line title early.
+    """
+    meaningful = []
+    for tok in line_stripped.split():
+        core = tok.strip("(),.*")
+        if core in ("-", "–", "—") or re.match(r'^\d?x$|^x\d$', core, re.IGNORECASE):
+            continue
+        meaningful.append(core)
+    return bool(meaningful) and all(CHORD_WORD_RE.match(c) for c in meaningful)
+
+
+def is_chord_line(line: str) -> bool:
+    """True if a line is a guitar-chord line. Kept distinct from section
+    markers so callers can strip chords while keeping CHORUS/VERSE labels."""
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if SECTION_MARKER_RE.match(stripped):
+        return False
+    return _is_chord_only(stripped)
+
+
 def is_chord_or_marker_line(line: str) -> bool:
     """True if a line looks like a guitar-chord line or a section marker
     (CHORUS/VERSE/roman numeral/etc), rather than title/lyric text --
@@ -78,17 +117,7 @@ def is_chord_or_marker_line(line: str) -> bool:
         return False
     if SECTION_MARKER_RE.match(stripped):
         return True
-    tokens = stripped.split()
-    total = len(tokens)
-    matched = 0
-    for tok in tokens:
-        core = tok.strip("(),.*")
-        if core in ("-", "–", "—") or re.match(r'^\d?x$|^x\d$', core, re.IGNORECASE):
-            matched += 1
-            continue
-        if CHORD_WORD_RE.match(core):
-            matched += 1
-    return total > 0 and (matched / total) >= 0.6
+    return _is_chord_only(stripped)
 
 
 def is_skip_line(line: str) -> bool:
@@ -101,6 +130,26 @@ def is_skip_line(line: str) -> bool:
         return True
     lowered = stripped.lower()
     return any(kw in lowered for kw in SKIP_KEYWORDS)
+
+
+# For bodies we drop credit/reprint/page-number lines but keep blank lines
+# (verse separation). We deliberately exclude the broad "bld" keyword from
+# SKIP_KEYWORDS here so a lyric line that merely mentions "BLD" isn't lost.
+BODY_SKIP_KEYWORDS = tuple(k for k in SKIP_KEYWORDS if k != "bld")
+
+
+def is_body_skip_line(line: str) -> bool:
+    """True if a non-blank body line is stray credit/reprint/page-number
+    text that should be removed (blank lines are kept for verse layout)."""
+    stripped = line.strip()
+    if not stripped:
+        return False  # keep blank line
+    if PAGE_NUM_RE.match(stripped):
+        return True
+    if SYMBOL_ONLY_RE.match(stripped):
+        return True
+    lowered = stripped.lower()
+    return any(kw in lowered for kw in BODY_SKIP_KEYWORDS)
 
 
 def pdf_to_text(pdf_path: str) -> str:
@@ -126,17 +175,44 @@ def dedupe_filename(base: str, used: dict) -> str:
     return f"{base} ({used[base]})"
 
 
+FRONT_MATTER_KEYWORDS = (
+    "contents", "table of contents", "introduction", "foreword",
+    "index", "songbook", "title page", "copyright",
+)
+
+
+def looks_like_front_matter(title: str) -> bool:
+    """Heuristic: is this segment's title really a cover/contents page rather
+    than a song? Used to skip junk front matter that appears before the first
+    footer (e.g. a contents/title page) instead of turning it into a nonsense
+    'song'."""
+    low = title.lower()
+    if any(kw in low for kw in FRONT_MATTER_KEYWORDS):
+        return True
+    # Real song titles are short; a long run of words is running text.
+    return len(title.split()) > 10
+
+
 def split_into_songs(full_text: str):
+    """Split the extracted PDF text into per-song dicts.
+
+    Returns (songs, warnings): songs is a list of {"title", "body"} in
+    document order (guitar-chord lines stripped from the body); warnings is
+    a list of human-readable notes (skipped front matter, etc.).
     """
-    Returns a list of {"title": str, "body": str} in document order.
-    """
-    # Split on the footer marker. segments[0] = song 1's raw text (title
-    # at top). segments[i] for i>0 = leftover page-number/blank lines
-    # followed by song (i+1)'s raw text.
+    # Form feeds ('\x0c') are page-break artifacts from pdftotext; strip them
+    # up front so they can't leak into titles/bodies or count as text.
+    full_text = full_text.replace("\x0c", "")
+
+    warnings = []
+
+    # Split on the footer marker. segments[0] = text before the first footer
+    # (front matter or song 1's raw text). segments[i] for i>0 = leftover
+    # page-number/blank lines followed by song (i+1)'s raw text.
     segments = FOOTER_RE.split(full_text)
 
     songs = []
-    for seg in segments:
+    for seg_index, seg in enumerate(segments):
         lines = seg.split("\n")
 
         # Skip leading page-number lines, form feeds, blank lines, and
@@ -168,10 +244,30 @@ def split_into_songs(full_text: str):
             idx += 1
 
         title = " ".join(title_lines)
-        body = "\n".join(lines[idx:]).strip("\n")
+
+        # Front matter (contents/title page) before the first footer would
+        # otherwise look like a normal song; drop it and tell the user.
+        if seg_index == 0 and looks_like_front_matter(title):
+            warnings.append(
+                f'Skipped leading segment that looks like front matter: "{title[:60]}"'
+            )
+            continue
+
+        # Build the body: drop guitar-chord lines and stray credit / page
+        # number / reprint lines (which can appear at the end of a song, not
+        # just at a segment start), but keep blank lines (verse separation)
+        # and section markers such as CHORUS/VERSE.
+        body_lines = []
+        for l in lines[idx:]:
+            if is_chord_line(l):
+                continue
+            if is_body_skip_line(l):
+                continue  # drop stray credit/page-number/reprint lines
+            body_lines.append(l)
+        body = "\n".join(body_lines).strip("\n")
         songs.append({"title": title, "body": body})
 
-    return songs
+    return songs, warnings
 
 
 def escape_rtf(text: str) -> str:
@@ -206,6 +302,8 @@ def main():
     ap.add_argument("pdf_path")
     ap.add_argument("--outdir", default="./songs")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="overwrite existing RTF files instead of refusing")
     args = ap.parse_args()
 
     if not os.path.isfile(args.pdf_path):
@@ -214,8 +312,11 @@ def main():
 
     print(f"Reading {args.pdf_path} ...")
     text = pdf_to_text(args.pdf_path)
-    songs = split_into_songs(text)
+    songs, warnings = split_into_songs(text)
     print(f"Detected {len(songs)} song(s).\n")
+
+    for w in warnings:
+        print(f"note: {w}")
 
     if args.dry_run:
         for i, song in enumerate(songs, start=1):
@@ -225,11 +326,30 @@ def main():
         return
 
     os.makedirs(args.outdir, exist_ok=True)
+
+    # Resolve all output paths up front so the overwrite guard checks the
+    # exact files that will be written (with de-duplication applied).
     used_names = {}
+    out_paths = []
     for song in songs:
         base = sanitize_filename(song["title"])
+        if base == "Untitled":
+            print(f"note: '{song['title'][:40]}' had no usable title; saved as 'Untitled'")
         base = dedupe_filename(base, used_names)
-        out_path = os.path.join(args.outdir, base + ".rtf")
+        out_paths.append(os.path.join(args.outdir, base + ".rtf"))
+
+    if not args.force:
+        conflicts = [p for p in out_paths if os.path.exists(p)]
+        if conflicts:
+            print(
+                "The following RTF files already exist "
+                "(re-run with --force to overwrite):\n"
+                + "\n".join(f"  {p}" for p in conflicts),
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    for song, out_path in zip(songs, out_paths):
         write_rtf(out_path, song["title"], song["body"])
 
     print(f"Wrote {len(songs)} RTF file(s) to {args.outdir}/")
