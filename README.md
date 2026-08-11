@@ -8,8 +8,12 @@ output, so each RTF contains only the song title, section labels
 ## Requirements
 
 - Python 3
-- [poppler-utils](https://poppler.freedesktop.org/) — provides the
-  `pdftotext` command used to extract text from the PDF. It must be on `PATH`.
+- [PyMuPDF](https://pymupdf.readthedocs.io/) (**recommended**) — layout-aware
+  PDF text extraction. It reads word positions so the tool can drop the chord
+  lines that hover above the lyrics, without relying on regex heuristics.
+  Install with `pip install pymupdf`.
+- Optional fallback: [poppler-utils](https://poppler.freedesktop.org/)
+  (`pdftotext -layout`) is used automatically only if PyMuPDF is not installed.
 
   - macOS (Homebrew): `brew install poppler`
   - Debian/Ubuntu: `sudo apt install poppler-utils`
@@ -63,6 +67,15 @@ The book ends every song with a recurring footer credit line (e.g.
 on that footer marker (tolerating small spelling/spacing variants) and treats
 the block between markers as one song. A leading cover/contents page is
 skipped automatically.
+
+## Chord removal
+
+With PyMuPDF, words are grouped into the horizontal bands they were typeset
+in. A band made entirely of guitar-chord symbols (the chord line that sits
+above a lyric line) is dropped, so only lyrics and section labels survive.
+This is position-aware rather than a post-hoc regex guess, so it holds up
+across different layouts. The `pdftotext` fallback relies on the regex-based
+chord-line detection instead.
 
 ## Tests
 

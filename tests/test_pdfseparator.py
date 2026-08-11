@@ -3,14 +3,14 @@ Tests for PDFSeparator.py core logic (song splitting, chord removal,
 front-matter handling, output helpers) plus an end-to-end check against the
 example songbook PDF in pdf/PRAISE1.pdf.
 
-The end-to-end portion needs `poppler-utils` (pdftotext) on PATH; it is
-skipped (not failed) when pdftotext or the example PDF is unavailable.
+The end-to-end portion needs PyMuPDF (pymupdf) installed; it is skipped
+(not failed) when PyMuPDF or the example PDF is unavailable.
 
 Run with:  python3 tests/test_pdfseparator.py
 """
+import importlib.util
 import os
 import re
-import shutil
 import sys
 import tempfile
 
@@ -44,6 +44,20 @@ check("plain lyric is not chord", P.is_chord_line("Amazing grace how sweet the s
 check("section marker is not a removable chord", P.is_chord_line("CHORUS") is False)
 check("marker still ends a title block", P.is_chord_or_marker_line("VERSE") is True)
 check("two-word hook is not a chord line", P.is_chord_line("Holy Forever") is False)
+
+# --- PyMuPDF layout helpers ---
+print("PyMuPDF layout helpers:")
+check("chord token detected", P._is_chord_token("F/A") is True)
+check("chord token (maj7) detected", P._is_chord_token("Cmaj7") is True)
+check("chord token (flat) detected", P._is_chord_token("Bb") is True)
+check("lyric token not a chord", P._is_chord_token("THERE") is False)
+words = [(10, 100, 20, 110, "F"), (30, 100, 40, 110, "Am7"), (10, 120, 25, 130, "THERE")]
+lines = P._group_words_into_lines(words)
+check("groups same-y words into one band", len(lines) == 2 and len(lines[0][1]) == 2)
+twocol = P._split_columns([(10, 0, 20, 10, "a"), (500, 0, 510, 10, "b")], gap_threshold=60)
+check("splits a wide-gap page into two columns", len(twocol) == 2)
+onecol = P._split_columns([(10, 0, 20, 10, "a"), (30, 0, 40, 10, "b")], gap_threshold=60)
+check("keeps a narrow page as one column", len(onecol) == 1)
 
 # --- Front matter heuristic ---
 print("Front-matter heuristic:")
@@ -182,8 +196,8 @@ print("End-to-end against pdf/PRAISE1.pdf:")
 pdf_path = os.path.join(ROOT, "pdf", "PRAISE1.pdf")
 if not os.path.isfile(pdf_path):
     print("  SKIP: example PDF not found at pdf/PRAISE1.pdf")
-elif shutil.which("pdftotext") is None:
-    print("  SKIP: pdftotext (poppler-utils) not on PATH")
+elif importlib.util.find_spec("pymupdf") is None:
+    print("  SKIP: PyMuPDF (pymupdf) not installed")
 else:
     text = P.pdf_to_text(pdf_path)
     songs, warnings = P.split_into_songs(text)

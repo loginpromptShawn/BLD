@@ -1,0 +1,2 @@
+# Layout-aware PDF extraction for PDFSeparator.py (recommended)
+pymupdf

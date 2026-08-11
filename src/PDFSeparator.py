@@ -152,12 +152,94 @@ def is_body_skip_line(line: str) -> bool:
     return any(kw in lowered for kw in BODY_SKIP_KEYWORDS)
 
 
+def _is_chord_token(tok: str) -> bool:
+    """True if a single extracted word is a guitar-chord symbol."""
+    return _is_chord_only(tok)
+
+
+def _group_words_into_lines(words, tol: float = 2.0):
+    """Group PyMuPDF words (x0,y0,x1,y1,text,...) into visual lines by y."""
+    ws = sorted(words, key=lambda w: (w[1], w[0]))
+    lines = []
+    for w in ws:
+        y = w[1]
+        if lines and abs(y - lines[-1][0]) <= tol:
+            lines[-1][1].append(w)
+        else:
+            lines.append([y, [w]])
+    return lines
+
+
+def _split_columns(words, gap_threshold: float = 60.0):
+    """Split a page's words into left/right columns on a large horizontal gap."""
+    if not words:
+        return [words]
+    xs = sorted(w[0] for w in words)
+    gaps = [xs[i + 1] - xs[i] for i in range(len(xs) - 1)]
+    if not gaps:
+        return [words]
+    gi = max(range(len(gaps)), key=lambda i: gaps[i])
+    if gaps[gi] < gap_threshold:
+        return [words]
+    cut = (xs[gi] + xs[gi + 1]) / 2
+    return [
+        [w for w in words if w[0] < cut],
+        [w for w in words if w[0] >= cut],
+    ]
+
+
+def extract_text_pymupdf(pdf_path: str) -> str:
+    """Extract layout-aware text with PyMuPDF.
+
+    Words are grouped into horizontal bands; bands consisting entirely of
+    guitar-chord symbols (the chord line hovering above a lyric line) are
+    dropped, leaving only lyric/section text. A blank line is inserted where
+    vertical spacing indicates a gap (verse/page separation).
+    """
+    import pymupdf
+
+    out = []
+    with pymupdf.open(pdf_path) as doc:
+        for page in doc:
+            words = [w for w in page.get_text("words") if w[4].strip()]
+            if not words:
+                continue
+            for col in _split_columns(words):
+                lines = [
+                    (y, sorted(ws, key=lambda w: w[0]))
+                    for y, ws in _group_words_into_lines(col)
+                ]
+                ys = [y for y, _ in lines]
+                gaps = [ys[i + 1] - ys[i] for i in range(len(ys) - 1)]
+                med = sorted(gaps)[len(gaps) // 2] if gaps else 13.0
+                if med <= 0:
+                    med = 13.0
+                prev = None
+                for y, ws in lines:
+                    if prev is not None and (y - prev) > max(1.6 * med, 20):
+                        out.append("")  # vertical gap -> blank line
+                    toks = [w[4] for w in ws]
+                    if toks and all(_is_chord_token(t) for t in toks):
+                        prev = y
+                        continue  # chord band -> drop it
+                    out.append(" ".join(toks))
+                    prev = y
+            out.append("")  # page separator
+    return "\n".join(out)
+
+
 def pdf_to_text(pdf_path: str) -> str:
-    result = subprocess.run(
-        ["pdftotext", "-layout", pdf_path, "-"],
-        capture_output=True, text=True, check=True,
-    )
-    return result.stdout
+    """Extract text from a PDF, preferring layout-aware PyMuPDF extraction
+    and falling back to `pdftotext -layout` (poppler-utils) if PyMuPDF is
+    not installed."""
+    try:
+        return extract_text_pymupdf(pdf_path)
+    except ImportError:
+        result = subprocess.run(
+            ["pdftotext", "-layout", pdf_path, "-"],
+            capture_output=True, text=True, check=True,
+        )
+        return result.stdout
 
 
 def sanitize_filename(name: str) -> str:
