@@ -71,7 +71,8 @@ SKIP_KEYWORDS = ("reprint", "printed", "ccli", "praise ministry", "reprinted by"
 
 
 CHORD_WORD_RE = re.compile(
-    r'^[A-G](#|b)?(maj7?|min7?|m7?|dim7?|aug|sus\d?|add\d?|M7?9?)*\d*(/[A-G](#|b)?\d*)?$',
+    r'^[A-G](#|b)?(maj7?|min7?|m7?|dim7?|aug|sus[24]?|add[679]?|M7?9?13?|b[59]?|#[59]?|[79])*'
+    r'\d*(/[A-G](#|b)?\d*)?$',
     re.IGNORECASE,
 )
 SECTION_MARKER_RE = re.compile(
@@ -282,6 +283,9 @@ FRONT_MATTER_KEYWORDS = (
     "contents", "table of contents", "introduction", "foreword",
     "index", "songbook", "title page", "copyright",
 )
+# NOTE: "songbook" is intentionally broad because the book's own title page
+# contains it; the tradeoff is that a real song titled "Songbook" would be
+# dropped. For this specific PDF the tradeoff is acceptable.
 
 
 def looks_like_front_matter(title: str) -> bool:
