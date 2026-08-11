@@ -44,6 +44,9 @@ check("plain lyric is not chord", P.is_chord_line("Amazing grace how sweet the s
 check("section marker is not a removable chord", P.is_chord_line("CHORUS") is False)
 check("marker still ends a title block", P.is_chord_or_marker_line("VERSE") is True)
 check("dashed marker recognized", P.is_chord_or_marker_line("-VERSE -") is True)
+check("plural marker recognized", P.is_chord_or_marker_line("CHORUSES") is True)
+check("plural dashed marker recognized", P.is_chord_or_marker_line("-CHORUSES -") is True)
+check("arabic numeral marker recognized", P.is_chord_or_marker_line("VERSE 1") is True)
 check("two-word hook is not a chord line", P.is_chord_line("Holy Forever") is False)
 
 # --- PyMuPDF layout helpers ---
@@ -180,6 +183,7 @@ check("lyric kept, credit gone", "May the words of my mouth" in s5[0]["body"])
 # --- RTF / write helpers ---
 print("RTF helpers:")
 check("escape_rtf escapes braces/backslash", P.escape_rtf("a{b}\\c") == "a\\{b\\}\\\\c")
+check("escape_rtf handles crlf and tab", P.escape_rtf("a\tb\rc") == "a\\tabbc")
 check("escape_rtf encodes non-ascii", P.escape_rtf("é") == "\\u233?")
 tmpdir = tempfile.mkdtemp()
 rtf_path = os.path.join(tmpdir, "x.rtf")
@@ -192,8 +196,17 @@ check("rtf contains body lines", "line1" in rtf and "line2" in rtf)
 os.remove(rtf_path)
 os.rmdir(tmpdir)
 
-# --- End-to-end against the real example PDF (needs pdftotext) ---
-print("End-to-end against pdf/PRAISE1.pdf:")
+# --- Fallback extraction behavior ---
+print("pdf_to_text fallback:")
+import unittest.mock as mock
+
+fake_proc = mock.MagicMock()
+fake_proc.stdout = "FAKE PDF TEXT\n"
+with mock.patch.object(P, "extract_text_pymupdf", side_effect=RuntimeError("boom")):
+    with mock.patch("subprocess.run", return_value=fake_proc) as m_run:
+        out = P.pdf_to_text("any.pdf")
+check("falls back to pdftotext when pymupdf fails", out == "FAKE PDF TEXT\n")
+check("pdftotext called with layout", m_run.call_args.args[0] == ["pdftotext", "-layout", "any.pdf", "-"])
 pdf_path = os.path.join(ROOT, "pdf", "PRAISE1.pdf")
 if not os.path.isfile(pdf_path):
     print("  SKIP: example PDF not found at pdf/PRAISE1.pdf")

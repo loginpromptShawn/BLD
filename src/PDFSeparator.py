@@ -74,7 +74,8 @@ CHORD_WORD_RE = re.compile(
     r'^[A-G](#|b)?(maj7?|min7?|m7?|dim7?|aug|sus\d?|add\d?|M7?9?)*\d*(/[A-G](#|b)?\d*)?$'
 )
 SECTION_MARKER_RE = re.compile(
-    r'^\s*-?\s*\(?(CHORUS|REFRAIN|VERSE|BRIDGE|INTRO|END|REPEAT)S?\.?:?\s*(I{1,3}V?|IV|V|VI{0,3})?\)?\s*-?\s*$'
+    r'^\s*-?\s*\(?(?:CHORUSES?|REFRAINS?|VERSES?|BRIDGES?|INTROS?|ENDS?|REPEATS?)'
+    r'\.?:?\s*(?:I{1,3}V?|IV|V|VI{0,3}|[1-9]\d*)?\)?\s*-?\s*$'
     r'|^\s*-?\s*(I{1,3}V?|IV|V|VI{0,3})\s*-?\s*$',
     re.IGNORECASE,
 )
@@ -234,11 +235,15 @@ def extract_text_pymupdf(pdf_path: str) -> str:
 def pdf_to_text(pdf_path: str) -> str:
     """Extract text from a PDF, preferring layout-aware PyMuPDF extraction
     and falling back to `pdftotext -layout` (poppler-utils) if PyMuPDF is
-    not installed."""
+    not installed or fails."""
     try:
         return extract_text_pymupdf(pdf_path)
-    except ImportError:
-        pass
+    except Exception as exc:
+        print(
+            f"PyMuPDF extraction failed ({type(exc).__name__}: {exc}); "
+            "falling back to pdftotext.",
+            file=sys.stderr,
+        )
 
     if not shutil.which("pdftotext"):
         print(
@@ -252,7 +257,7 @@ def pdf_to_text(pdf_path: str) -> str:
         sys.exit(1)
     result = subprocess.run(
         ["pdftotext", "-layout", pdf_path, "-"],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=60,
     )
     return result.stdout
 
@@ -370,8 +375,18 @@ def split_into_songs(full_text: str):
 def escape_rtf(text: str) -> str:
     out = []
     for ch in text:
-        if ch in ("\\", "{", "}"):
-            out.append("\\" + ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == "{":
+            out.append("\\{")
+        elif ch == "}":
+            out.append("\\}")
+        elif ch == "\n":
+            out.append("\\line")
+        elif ch == "\r":
+            pass  # normalize Windows CRLF
+        elif ch == "\t":
+            out.append("\\tab")
         elif ord(ch) > 127:
             out.append(f"\\u{ord(ch)}?")
         else:
