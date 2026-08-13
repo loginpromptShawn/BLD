@@ -1,2 +1,12 @@
 # Temporary / generated files
 /songs.rtf
+/songs.txt
+/songs.docx
+/src/output/
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
