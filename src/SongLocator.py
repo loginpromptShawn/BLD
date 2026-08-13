@@ -4,7 +4,7 @@ A simple GUI to track the type of each song in your library.
 
 Features:
 - Add a single song (type optional -> defaults to "unset")
-- Add multiple song titles at once (bulk paste, one per line, no type needed)
+- Add multiple song titles at once (bulk paste, one per line, choose a type: PPTX, RTF, or TXT)
 - Look up a song: exact match -> substring match -> fuzzy match (typo-tolerant)
 - Data persisted as JSON in your home directory
 
@@ -26,7 +26,6 @@ DB_FILE = os.path.expanduser("~/song_locations.json")
 DEFAULT_TYPE = "unset"
 
 # --- Dark theme ---
-#shawn edit
 BG_COLOR = "#2b2b2b"
 FG_COLOR = "white"
 ENTRY_BG = "#3c3c3c"
@@ -167,6 +166,36 @@ def parse_types(raw):
     return [t.strip() for t in raw.split(",") if t.strip()]
 
 
+def _merge_types(existing, new_types):
+    """Merge `new_types` into `existing` (a list), returning (added, skipped).
+
+    The ``existing`` list is modified in place. Rules mirror ``add_song``:
+
+    - A type already present is skipped.
+    - "unset" is upgraded to a real type when one is added.
+    - "unset" cannot be re-added to a song that already has real types.
+    - A different real type is appended (a song can exist in multiple formats).
+    """
+    added = []
+    skipped = []
+    for song_type in new_types:
+        if song_type in existing:
+            skipped.append(song_type)
+        elif DEFAULT_TYPE in existing and song_type != DEFAULT_TYPE:
+            # Upgrade an "unset" entry to the newly entered type.
+            existing.remove(DEFAULT_TYPE)
+            existing.append(song_type)
+            added.append(song_type)
+        elif song_type == DEFAULT_TYPE:
+            # Trying to add "unset" to a song that already has real types.
+            skipped.append(song_type)
+        else:
+            # A different type - keep both (a song can exist in multiple formats).
+            existing.append(song_type)
+            added.append(song_type)
+    return added, skipped
+
+
 def add_song():
     name = normalize_name(name_entry.get())
     new_types = parse_types(type_entry.get())
@@ -185,34 +214,16 @@ def add_song():
         db[key] = list(new_types)
         message = f"Added: {name} -> {format_types(db[key])}"
     else:
-        types = db[key]
-        added = []
-        skipped = []
-
-        for song_type in new_types:
-            if song_type in types:
-                skipped.append(song_type)
-            elif DEFAULT_TYPE in types and song_type != DEFAULT_TYPE:
-                # Upgrade an "unset" entry to the newly entered type.
-                types.remove(DEFAULT_TYPE)
-                types.append(song_type)
-                added.append(song_type)
-            elif song_type == DEFAULT_TYPE:
-                # Trying to add "unset" to a song that already has real types.
-                skipped.append(song_type)
-            else:
-                # A different type - keep both (a song can exist in multiple formats).
-                types.append(song_type)
-                added.append(song_type)
+        added, skipped = _merge_types(db[key], new_types)
 
         if added and skipped:
-            message = f'Added {format_types(added)} to "{name}". Skipped: {format_types(skipped)}. Types: {format_types(types)}'
+            message = f'Added {format_types(added)} to "{name}". Skipped: {format_types(skipped)}. Types: {format_types(db[key])}'
         elif added:
-            message = f'Added {format_types(added)} to "{name}". Types: {format_types(types)}'
+            message = f'Added {format_types(added)} to "{name}". Types: {format_types(db[key])}'
         elif skipped:
-            message = f'"{name}" already has: {format_types(types)}'
+            message = f'"{name}" already has: {format_types(db[key])}'
         else:
-            message = f'"{name}" unchanged. Types: {format_types(types)}'
+            message = f'"{name}" unchanged. Types: {format_types(db[key])}'
 
     try:
         save_db(db)
@@ -230,6 +241,8 @@ def add_bulk_titles():
     if not raw_text:
         return
 
+    new_type = bulk_type_var.get()
+
     reload_db()
     lines = [normalize_name(line) for line in raw_text.splitlines() if line.strip()]
     added = []
@@ -237,11 +250,15 @@ def add_bulk_titles():
 
     for name in lines:
         key = name.lower()
-        if key in db:
-            skipped.append(name)
-            continue
-        db[key] = [DEFAULT_TYPE]
-        added.append(name)
+        if key not in db:
+            db[key] = [new_type]
+            added.append(name)
+        else:
+            _added, _skipped = _merge_types(db[key], [new_type])
+            if _added:
+                added.append(name)
+            else:
+                skipped.append(name)
 
     try:
         save_db(db)
@@ -251,9 +268,9 @@ def add_bulk_titles():
 
     bulk_text.delete("1.0", tk.END)
 
-    summary = f"Added {len(added)} song(s)."
+    summary = f"Added {len(added)} song(s) as {new_type}."
     if skipped:
-        summary += f" Skipped {len(skipped)} already in library: {', '.join(skipped)}"
+        summary += f" Skipped {len(skipped)} already have {new_type}: {', '.join(skipped)}"
     result_label.config(text=summary)
 
 
@@ -381,8 +398,26 @@ type_entry.pack()
 make_button(root, "Add", add_song).pack(pady=5)
 
 # --- Add multiple titles at once ---
-make_label(root, text="Add multiple titles (one per line, no type)",
+make_label(root, text="Add multiple titles (one per line)",
            font=("Helvetica", 12, "bold")).pack(pady=(15, 0))
+
+make_label(root, text="File type:").pack()
+bulk_type_choices = ["PPTX", "RTF", "TXT"]
+bulk_type_var = tk.StringVar(value=bulk_type_choices[0])
+bulk_type_menu = tk.OptionMenu(root, bulk_type_var, *bulk_type_choices)
+bulk_type_menu.config(
+    bg=ENTRY_BG, fg=FG_COLOR,
+    activebackground=ENTRY_BG, activeforeground=FG_COLOR,
+    highlightbackground=BORDER_COLOR, highlightcolor=BORDER_COLOR,
+    highlightthickness=1,
+    anchor="w", width=18,
+)
+bulk_type_menu["menu"].config(
+    bg=ENTRY_BG, fg=FG_COLOR,
+    activebackground=FG_COLOR, activeforeground=ENTRY_BG,
+)
+bulk_type_menu.pack()
+
 bulk_text = tk.Text(
     root, width=40, height=6,
     bg=ENTRY_BG, fg=FG_COLOR,

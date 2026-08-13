@@ -35,6 +35,7 @@ load_db = ns["load_db"]
 save_db = ns["save_db"]
 normalize_name = ns["normalize_name"]
 parse_types = ns["parse_types"]
+_merge_types = ns["_merge_types"]
 PasteDebouncer = ns["PasteDebouncer"]
 DEFAULT_TYPE = ns["DEFAULT_TYPE"]
 
@@ -193,6 +194,47 @@ check("paste 200ms after first accepted again", d.is_duplicate(now=1.20) is Fals
 check("double-fire of recovered paste ignored", d.is_duplicate(now=1.25) is True)
 check("paste long after previous accepted again", d.is_duplicate(now=2.00) is False)
 check("empty window passes everything", PasteDebouncer(window_ms=0).is_duplicate(now=5.0) is False)
+
+# --- Test 12: _merge_types (shared add-type logic) ---
+# Exercises the upgrade/skip/append rules that both add_song and
+# add_bulk_titles rely on when merging a type into an existing song entry.
+print("Test _merge_types:")
+
+# New song: type added, nothing skipped
+existing = []
+added, skipped = _merge_types(existing, ["PPTX"])
+check("new type added", added == ["PPTX"] and skipped == [])
+
+# Already has the type -> skip
+existing = ["RTF"]
+added, skipped = _merge_types(existing, ["RTF"])
+check("same type skipped", added == [] and skipped == ["RTF"])
+check("existing unchanged on skip", existing == ["RTF"])
+
+# unset -> upgrade to a real type
+existing = ["unset"]
+added, skipped = _merge_types(existing, ["PPTX"])
+check("unset upgraded", added == ["PPTX"] and skipped == [])
+check("unset removed from existing", existing == ["PPTX"])
+
+# different real type -> append both (song can have multiple formats)
+existing = ["RTF"]
+added, skipped = _merge_types(existing, ["PPTX"])
+check("different type appended", added == ["PPTX"] and skipped == [])
+check("both types kept", existing == ["RTF", "PPTX"])
+
+# adding unset to an already-typed song -> skip
+existing = ["RTF", "PPTX"]
+added, skipped = _merge_types(existing, ["unset"])
+check("unset not added to typed", added == [] and skipped == ["unset"])
+check("typed song unchanged", existing == ["RTF", "PPTX"])
+
+# mixed list: duplicates skipped, new types appended, unset skipped
+existing = ["RTF"]
+added, skipped = _merge_types(existing, ["RTF", "PPTX", "unset"])
+check("mixed: PPTX added", added == ["PPTX"])
+check("mixed: RTF and unset skipped", skipped == ["RTF", "unset"])
+check("mixed: appended PPTX", existing == ["RTF", "PPTX"])
 
 print(f"\n=== {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)
