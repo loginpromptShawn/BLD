@@ -1,5 +1,11 @@
 """
-Tests for SongLocator.py core logic (migration, repair, duplicate handling).
+Tests for SongLocator.py core logic (migration, repair, duplicate handling,
+search).
+
+Each test group is an importable, callable function so that behave feature
+steps can run the relevant groups per scenario. Running this file directly
+(or calling run_all()) runs every group, prints a summary, and exits nonzero
+on any failure.
 
 Run with:  python3 tests/test_songlocator.py
 """
@@ -36,6 +42,7 @@ save_db = ns["save_db"]
 normalize_name = ns["normalize_name"]
 parse_types = ns["parse_types"]
 _merge_types = ns["_merge_types"]
+search_db = ns["search_db"]
 PasteDebouncer = ns["PasteDebouncer"]
 DEFAULT_TYPE = ns["DEFAULT_TYPE"]
 
@@ -53,188 +60,242 @@ def check(desc, cond):
         print(f"  FAIL: {desc}")
 
 
-# --- Test 1: normalize_name ---
-print("Test normalize_name:")
-check("strips and collapses whitespace", normalize_name("  hello   world  ") == "hello world")
-check("single word unchanged", normalize_name("hello") == "hello")
+# --- Search behavior (Scenario C) ---------------------------------------
+def test_search_exact():
+    print("  search: exact match")
+    db = {"song one": ["RTF"]}
+    kind, matches = search_db(db, "song one")
+    check("kind is exact", kind == "exact")
+    check("exact match returned", matches == [("song one", ["RTF"])])
 
-# --- Test 2: load_db on missing file ---
-print("Test load_db missing file:")
-db, warnings = load_db()
-check("returns empty dict", db == {})
-check("no warnings", warnings == [])
 
-# --- Test 3: migration of old {name: type} format ---
-print("Test migration old format:")
-with open(test_db, "w", encoding="utf-8") as f:
-    json.dump({"song one": "RTF", "song two": "PPTX"}, f)
-db, warnings = load_db()
-check("string migrated to list", db["song one"] == ["RTF"])
-check("second migrated", db["song two"] == ["PPTX"])
-check("no warnings for clean migration", warnings == [])
+def test_search_substring():
+    print("  search: substring match")
+    db = {
+        "i love you": ["RTF"],
+        "hello world": ["TXT"],
+        "love is a verb": ["PPTX"],
+    }
+    # single substring hit
+    kind, matches = search_db(db, "hello")
+    check("kind is substring", kind == "substring")
+    check("single substring found", matches == [("hello world", ["TXT"])])
+    # multiple substring hits
+    kind, matches = search_db(db, "love")
+    check("multiple substrings found", kind == "substring"
+          and [k for k, _ in matches] == ["i love you", "love is a verb"])
 
-# --- Test 4: doubled-name repair ---
-print("Test doubled-name repair:")
-with open(test_db, "w", encoding="utf-8") as f:
-    json.dump({
-        "because he livesbecause he lives": "RTF",
-        "holy forever": "PPTX",
-        "mama": "TXT",  # short name, should NOT be touched
-    }, f)
-db, warnings = load_db()
-check("doubled name repaired", "because he lives" in db)
-check("doubled key removed", "because he livesbecause he lives" not in db)
-check("repaired value preserved", db["because he lives"] == ["RTF"])
-check("short name untouched", "mama" in db and db["mama"] == ["TXT"])
-check("repair warning emitted", any("Fixed doubled" in w for w in warnings))
 
-# --- Test 5: doubled name merging with existing entry ---
-print("Test doubled-name merge:")
-with open(test_db, "w", encoding="utf-8") as f:
-    json.dump({
-        "holy forever": "PPTX",
-        "holy foreverholy forever": "RTF",
-    }, f)
-db, warnings = load_db()
-check("merged into existing", db["holy forever"] == ["PPTX", "RTF"])
-check("doubled key removed", "holy foreverholy forever" not in db)
+def test_search_fuzzy():
+    print("  search: fuzzy / no match")
+    db = {"because he lives": ["RTF"], "holy forever": ["PPTX"], "mama": ["TXT"]}
+    kind, matches = search_db(db, "becasue he lives")  # typo
+    check("kind is fuzzy", kind == "fuzzy")
+    check("closest match returned", matches == [("because he lives", ["RTF"])])
+    kind, matches = search_db(db, "zzzzzzzz")
+    check("no-match kind", kind == "none")
+    check("no-match list", matches == [])
+    check("blank query returns None", search_db(db, "   ") is None)
 
-# --- Test 6: corrupt JSON handling ---
-print("Test corrupt JSON:")
-with open(test_db, "w", encoding="utf-8") as f:
-    f.write("{ this is not valid json")
-db, warnings = load_db()
-check("returns empty dict on corrupt", db == {})
-check("corrupt warning emitted", any("Could not read" in w for w in warnings))
-check("corrupt file moved to backup", os.path.exists(test_db + ".corrupt"))
 
-# --- Test 7: non-dict JSON ---
-print("Test non-dict JSON:")
-with open(test_db, "w", encoding="utf-8") as f:
-    json.dump(["not", "a", "dict"], f)
-db, warnings = load_db()
-check("returns empty dict for list", db == {})
-check("non-dict warning emitted", any("valid song database" in w for w in warnings))
+# --- Name normalization (Scenarios A & B) --------------------------------
+def test_normalize_name():
+    print("  normalize_name")
+    check("strips and collapses whitespace", normalize_name("  hello   world  ") == "hello world")
+    check("single word unchanged", normalize_name("hello") == "hello")
 
-# --- Test 8: duplicate handling logic (simulating add_song) ---
-print("Test duplicate handling:")
-# Fresh db
-db = {"song a": ["unset"], "song b": ["RTF"], "song c": ["RTF", "PPTX"]}
 
-# Case: new song
-key = "song new"
-if key not in db:
-    db[key] = ["unset"]
-check("new song added as unset", db["song new"] == ["unset"])
+# --- Storage / persistence (shared by all scenarios) --------------------
+def test_load_db_missing():
+    print("  load_db missing file")
+    if os.path.exists(test_db):
+        os.remove(test_db)
+    db, warnings = load_db()
+    check("returns empty dict", db == {})
+    check("no warnings", warnings == [])
 
-# Case: existing with unset, add real type -> upgrade
-key = "song a"
-types = db[key]
-if "RTF" in types:
-    pass
-elif "unset" in types:
-    types.remove("unset")
-    types.append("RTF")
-check("unset upgraded to RTF", db["song a"] == ["RTF"])
 
-# Case: existing with real type, add same type -> no change
-key = "song b"
-types = db[key]
-if "RTF" in types:
-    pass
-check("same type no change", db["song b"] == ["RTF"])
+def test_migration():
+    print("  load_db migration old format")
+    with open(test_db, "w", encoding="utf-8") as f:
+        json.dump({"song one": "RTF", "song two": "PPTX"}, f)
+    db, warnings = load_db()
+    check("string migrated to list", db["song one"] == ["RTF"])
+    check("second migrated", db["song two"] == ["PPTX"])
+    check("no warnings for clean migration", warnings == [])
 
-# Case: existing with real type, add different type -> append (keep both)
-key = "song b"
-types = db[key]
-if "PPTX" in types:
-    pass
-else:
-    types.append("PPTX")
-check("different type appended", db["song b"] == ["RTF", "PPTX"])
 
-# Case: existing with real types, add unset -> no change
-key = "song c"
-types = db[key]
-if "unset" in types:
-    pass
-check("unset not added to typed song", db["song c"] == ["RTF", "PPTX"])
+def test_doubled_repair():
+    print("  load_db doubled-name repair")
+    with open(test_db, "w", encoding="utf-8") as f:
+        json.dump({
+            "because he livesbecause he lives": "RTF",
+            "holy forever": "PPTX",
+            "mama": "TXT",  # short name, should NOT be touched
+        }, f)
+    db, warnings = load_db()
+    check("doubled name repaired", "because he lives" in db)
+    check("doubled key removed", "because he livesbecause he lives" not in db)
+    check("repaired value preserved", db["because he lives"] == ["RTF"])
+    check("short name untouched", "mama" in db and db["mama"] == ["TXT"])
+    check("repair warning emitted", any("Fixed doubled" in w for w in warnings))
 
-# --- Test 9: save_db atomic write ---
-print("Test save_db:")
-save_db({"test": ["RTF"]})
-with open(test_db, "r", encoding="utf-8") as f:
-    saved = json.load(f)
-check("save_db writes correctly", saved == {"test": ["RTF"]})
-check("no temp files left", not [f for f in os.listdir(tmpdir) if f.endswith(".tmp")])
 
-# --- Test 10: parse_types (comma-separated type input) ---
-print("Test parse_types:")
-check("single type", parse_types("RTF") == ["RTF"])
-check("comma-separated types", parse_types("RTF, PPTX") == ["RTF", "PPTX"])
-check("types with extra whitespace", parse_types("  RTF ,  PPTX  ") == ["RTF", "PPTX"])
-check("empty string returns []", parse_types("") == [])
-check("only commas returns []", parse_types(" , , ") == [])
-check("mixed empty entries skipped", parse_types("RTF,,PPTX") == ["RTF", "PPTX"])
+def test_doubled_merge():
+    print("  load_db doubled-name merge")
+    with open(test_db, "w", encoding="utf-8") as f:
+        json.dump({
+            "holy forever": "PPTX",
+            "holy foreverholy forever": "RTF",
+        }, f)
+    db, warnings = load_db()
+    check("merged into existing", db["holy forever"] == ["PPTX", "RTF"])
+    check("doubled key removed", "holy foreverholy forever" not in db)
 
-# --- Test 11: PasteDebouncer debounces duplicates but recovers ---
-# Regression test for a units bug: the debounce window (150 ms) was being
-# compared against time.monotonic() values in seconds, so 150 was treated
-# as 150 *seconds* and every subsequent paste was ignored as a "duplicate".
-print("Test PasteDebouncer:")
-d = PasteDebouncer(window_ms=150)
-check("window correctly converted to seconds", d.window_s == 0.15)
-check("first paste accepted", d.is_duplicate(now=1.00) is False)
-check("double-fire 50ms later ignored", d.is_duplicate(now=1.05) is True)
-# Key regression: a paste that arrives after the debounce window has elapsed
-# must be accepted again (it is NOT a duplicate of the earlier paste). With
-# the buggy units, now=1.20 would still be within the mistaken 150-second
-# window and pasting would silently stop working.
-check("paste 200ms after first accepted again", d.is_duplicate(now=1.20) is False)
-check("double-fire of recovered paste ignored", d.is_duplicate(now=1.25) is True)
-check("paste long after previous accepted again", d.is_duplicate(now=2.00) is False)
-check("empty window passes everything", PasteDebouncer(window_ms=0).is_duplicate(now=5.0) is False)
 
-# --- Test 12: _merge_types (shared add-type logic) ---
-# Exercises the upgrade/skip/append rules that both add_song and
-# add_bulk_titles rely on when merging a type into an existing song entry.
-print("Test _merge_types:")
+# --- Data integrity (shared by all scenarios) ---------------------------
+def test_corrupt_json():
+    print("  load_db corrupt JSON")
+    with open(test_db, "w", encoding="utf-8") as f:
+        f.write("{ this is not valid json")
+    db, warnings = load_db()
+    check("returns empty dict on corrupt", db == {})
+    check("corrupt warning emitted", any("Could not read" in w for w in warnings))
+    check("corrupt file moved to backup", os.path.exists(test_db + ".corrupt"))
 
-# New song: type added, nothing skipped
-existing = []
-added, skipped = _merge_types(existing, ["PPTX"])
-check("new type added", added == ["PPTX"] and skipped == [])
 
-# Already has the type -> skip
-existing = ["RTF"]
-added, skipped = _merge_types(existing, ["RTF"])
-check("same type skipped", added == [] and skipped == ["RTF"])
-check("existing unchanged on skip", existing == ["RTF"])
+def test_non_dict_json():
+    print("  load_db non-dict JSON")
+    with open(test_db, "w", encoding="utf-8") as f:
+        json.dump(["not", "a", "dict"], f)
+    db, warnings = load_db()
+    check("returns empty dict for list", db == {})
+    check("non-dict warning emitted", any("valid song database" in w for w in warnings))
 
-# unset -> upgrade to a real type
-existing = ["unset"]
-added, skipped = _merge_types(existing, ["PPTX"])
-check("unset upgraded", added == ["PPTX"] and skipped == [])
-check("unset removed from existing", existing == ["PPTX"])
 
-# different real type -> append both (song can have multiple formats)
-existing = ["RTF"]
-added, skipped = _merge_types(existing, ["PPTX"])
-check("different type appended", added == ["PPTX"] and skipped == [])
-check("both types kept", existing == ["RTF", "PPTX"])
+# --- Duplicate handling (Scenario A) ------------------------------------
+def test_duplicate_handling():
+    print("  add_song duplicate handling")
+    db = {"song a": ["unset"], "song b": ["RTF"], "song c": ["RTF", "PPTX"]}
+    key = "song new"
+    if key not in db:
+        db[key] = ["unset"]
+    check("new song added as unset", db["song new"] == ["unset"])
+    key = "song a"
+    types = db[key]
+    if "RTF" in types:
+        pass
+    elif "unset" in types:
+        types.remove("unset")
+        types.append("RTF")
+    check("unset upgraded to RTF", db["song a"] == ["RTF"])
+    key = "song b"
+    types = db[key]
+    if "RTF" in types:
+        pass
+    check("same type no change", db["song b"] == ["RTF"])
+    key = "song b"
+    types = db[key]
+    if "PPTX" in types:
+        pass
+    else:
+        types.append("PPTX")
+    check("different type appended", db["song b"] == ["RTF", "PPTX"])
+    key = "song c"
+    types = db[key]
+    if "unset" in types:
+        pass
+    check("unset not added to typed song", db["song c"] == ["RTF", "PPTX"])
 
-# adding unset to an already-typed song -> skip
-existing = ["RTF", "PPTX"]
-added, skipped = _merge_types(existing, ["unset"])
-check("unset not added to typed", added == [] and skipped == ["unset"])
-check("typed song unchanged", existing == ["RTF", "PPTX"])
 
-# mixed list: duplicates skipped, new types appended, unset skipped
-existing = ["RTF"]
-added, skipped = _merge_types(existing, ["RTF", "PPTX", "unset"])
-check("mixed: PPTX added", added == ["PPTX"])
-check("mixed: RTF and unset skipped", skipped == ["RTF", "unset"])
-check("mixed: appended PPTX", existing == ["RTF", "PPTX"])
+def test_save_db():
+    print("  save_db atomic write")
+    save_db({"test": ["RTF"]})
+    with open(test_db, "r", encoding="utf-8") as f:
+        saved = json.load(f)
+    check("save_db writes correctly", saved == {"test": ["RTF"]})
+    check("no temp files left", not [f for f in os.listdir(tmpdir) if f.endswith(".tmp")])
 
-print(f"\n=== {passed} passed, {failed} failed ===")
-sys.exit(1 if failed else 0)
+
+def test_parse_types():
+    print("  parse_types")
+    check("single type", parse_types("RTF") == ["RTF"])
+    check("comma-separated types", parse_types("RTF, PPTX") == ["RTF", "PPTX"])
+    check("types with extra whitespace", parse_types("  RTF ,  PPTX  ") == ["RTF", "PPTX"])
+    check("empty string returns []", parse_types("") == [])
+    check("only commas returns []", parse_types(" , , ") == [])
+    check("mixed empty entries skipped", parse_types("RTF,,PPTX") == ["RTF", "PPTX"])
+
+
+# --- Paste debounce (Scenario B) ----------------------------------------
+def test_paste_debouncer():
+    print("  PasteDebouncer")
+    d = PasteDebouncer(window_ms=150)
+    check("window correctly converted to seconds", d.window_s == 0.15)
+    check("first paste accepted", d.is_duplicate(now=1.00) is False)
+    check("double-fire 50ms later ignored", d.is_duplicate(now=1.05) is True)
+    check("paste 200ms after first accepted again", d.is_duplicate(now=1.20) is False)
+    check("double-fire of recovered paste ignored", d.is_duplicate(now=1.25) is True)
+    check("paste long after previous accepted again", d.is_duplicate(now=2.00) is False)
+    check("empty window passes everything", PasteDebouncer(window_ms=0).is_duplicate(now=5.0) is False)
+
+
+# --- Type merging (Scenarios A & B) --------------------------------------
+def test_merge_types():
+    print("  _merge_types")
+    existing = []
+    added, skipped = _merge_types(existing, ["PPTX"])
+    check("new type added", added == ["PPTX"] and skipped == [])
+    existing = ["RTF"]
+    added, skipped = _merge_types(existing, ["RTF"])
+    check("same type skipped", added == [] and skipped == ["RTF"])
+    check("existing unchanged on skip", existing == ["RTF"])
+    existing = ["unset"]
+    added, skipped = _merge_types(existing, ["PPTX"])
+    check("unset upgraded", added == ["PPTX"] and skipped == [])
+    check("unset removed from existing", existing == ["PPTX"])
+    existing = ["RTF"]
+    added, skipped = _merge_types(existing, ["PPTX"])
+    check("different type appended", added == ["PPTX"] and skipped == [])
+    check("both types kept", existing == ["RTF", "PPTX"])
+    existing = ["RTF", "PPTX"]
+    added, skipped = _merge_types(existing, ["unset"])
+    check("unset not added to typed", added == [] and skipped == ["unset"])
+    check("typed song unchanged", existing == ["RTF", "PPTX"])
+    existing = ["RTF"]
+    added, skipped = _merge_types(existing, ["RTF", "PPTX", "unset"])
+    check("mixed: PPTX added", added == ["PPTX"])
+    check("mixed: RTF and unset skipped", skipped == ["RTF", "unset"])
+    check("mixed: appended PPTX", existing == ["RTF", "PPTX"])
+
+
+_ALL_GROUPS = [
+    ("search_db exact", test_search_exact),
+    ("search_db substring", test_search_substring),
+    ("search_db fuzzy", test_search_fuzzy),
+    ("normalize_name", test_normalize_name),
+    ("load_db missing file", test_load_db_missing),
+    ("migration old format", test_migration),
+    ("doubled-name repair", test_doubled_repair),
+    ("doubled-name merge", test_doubled_merge),
+    ("corrupt JSON", test_corrupt_json),
+    ("non-dict JSON", test_non_dict_json),
+    ("duplicate handling", test_duplicate_handling),
+    ("save_db atomic write", test_save_db),
+    ("parse_types", test_parse_types),
+    ("PasteDebouncer", test_paste_debouncer),
+    ("_merge_types", test_merge_types),
+]
+
+
+def run_all():
+    """Run every test group in turn, printing a running summary."""
+    for title, fn in _ALL_GROUPS:
+        print(f"\n== {title} ==")
+        fn()
+    print(f"\n=== {passed} passed, {failed} failed ===")
+    return failed
+
+
+if __name__ == "__main__":
+    sys.exit(1 if run_all() else 0)

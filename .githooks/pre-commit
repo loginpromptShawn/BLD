@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#
+# pre-commit hook: run all tests before every commit.
+#
+# If any test fails, the commit is ABORTED (non-zero exit).
+# Runs on ALL branches, testing the branch's working tree / staged state.
+#
+# Enable with:  git config core.hooksPath .githooks
+set -e
+
+BRANCH="$(git branch --show-current)"
+echo "pre-commit: running all tests on branch '$BRANCH'..."
+echo
+
+# 1) Unit tests — this runner exits nonzero on any failure.
+"${PWD}/.venv/bin/python" tests/test_songlocator.py
+
+# 2) BDD tests — behave exits nonzero on any failing scenario.
+"${PWD}/.venv/bin/python" -m behave
+
+echo
+echo "pre-commit: all tests passed -> commit allowed ✔"

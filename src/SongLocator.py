@@ -274,40 +274,74 @@ def add_bulk_titles():
     result_label.config(text=summary)
 
 
+def search_db(db, query):
+    """Evaluate how ``query`` matches the database, independent of the GUI.
+
+    Returns a ``(kind, matches)`` tuple where ``kind`` is one of:
+
+      "exact"     -- a stored name equals the query
+      "substring" -- the query appears within one or more stored names
+      "fuzzy"     -- no substring hit; closest typo-tolerant names (n=3, cutoff=0.6)
+      "none"      -- no match of any kind
+
+    ``matches`` is a list of ``(stored_key, types_list)`` entries. A blank or
+    whitespace-only query returns ``None``.
+    """
+    q = query.strip().lower()
+    if not q:
+        return None
+
+    # 1. Exact match
+    if q in db:
+        return ("exact", [(q, db[q])])
+
+    # 2. Substring match - query appears anywhere in a stored song name
+    substring_matches = [key for key in db if q in key]
+    if substring_matches:
+        return ("substring", [(m, db[m]) for m in substring_matches])
+
+    # 3. Fuzzy match - fallback for typos / near-misses
+    fuzzy_matches = difflib.get_close_matches(q, db.keys(), n=3, cutoff=0.6)
+    if fuzzy_matches:
+        return ("fuzzy", [(m, db[m]) for m in fuzzy_matches])
+
+    return ("none", [])
+
+
 def lookup_song():
-    query = lookup_entry.get().strip().lower()
+    query = lookup_entry.get().strip()
     if not query:
         result_label.config(text="Enter a song name to search.")
         return
 
     reload_db()
 
-    # 1. Exact match
-    if query in db:
-        result_label.config(text=f'Found: "{query}" -> {format_types(db[query])}')
+    result = search_db(db, query)
+    if result is None:
+        result_label.config(text="Enter a song name to search.")
         return
 
-    # 2. Substring match - query appears anywhere in a stored song name
-    substring_matches = [key for key in db if query in key]
-    if substring_matches:
-        if len(substring_matches) == 1:
-            best = substring_matches[0]
-            result_label.config(text=f'Found: "{best}" -> {format_types(db[best])}')
+    kind, matches = result
+
+    if kind == "exact":
+        best, types = matches[0]
+        result_label.config(text=f'Found: "{best}" -> {format_types(types)}')
+    elif kind == "substring":
+        if len(matches) == 1:
+            best, types = matches[0]
+            result_label.config(text=f'Found: "{best}" -> {format_types(types)}')
         else:
-            lines = [f'- "{m}" -> {format_types(db[m])}' for m in substring_matches]
+            lines = [f'- "{m}" -> {format_types(t)}' for m, t in matches]
             result_label.config(text="Multiple matches contain that:\n" + "\n".join(lines))
-        return
-
-    # 3. Fuzzy match - fallback for typos / near-misses
-    fuzzy_matches = difflib.get_close_matches(query, db.keys(), n=3, cutoff=0.6)
-    if not fuzzy_matches:
-        result_label.config(text=f"Not found: '{lookup_entry.get()}'")
-    elif len(fuzzy_matches) == 1:
-        best = fuzzy_matches[0]
-        result_label.config(text=f'Closest match "{best}" -> {format_types(db[best])}')
-    else:
-        lines = [f'- "{m}" -> {format_types(db[m])}' for m in fuzzy_matches]
-        result_label.config(text="Multiple close matches:\n" + "\n".join(lines))
+    elif kind == "fuzzy":
+        if len(matches) == 1:
+            best, types = matches[0]
+            result_label.config(text=f'Closest match "{best}" -> {format_types(types)}')
+        else:
+            lines = [f'- "{m}" -> {format_types(t)}' for m, t in matches]
+            result_label.config(text="Multiple close matches:\n" + "\n".join(lines))
+    else:  # "none"
+        result_label.config(text=f"Not found: '{query}'")
 
 
 # ---------------------------------------------------------------------------
