@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#
+# pre-push: audit every push so that, when investigating something that got
+# through, you can correlate which commit SHAs were sent to the remote with the
+# CI runs / hook results for those SHAs.
+#
+# Each pushed ref is recorded in <git-dir>/hook-audit.log.
+# This hook does NOT block the push by default.
+#
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib.sh"
+
+begin_attempt
+
+audit_rule
+audit "EVENT    pre-push    attempt=${ATTEMPT_ID}"
+
+# stdin per pushed ref:  <local ref> <local sha> <remote ref> <remote sha>
+while read -r lref lsha rref rsha; do
+  [ -z "$lref" ] && continue
+  audit "PUSH     ${lref}  ${lsha}  ->  ${rref}  ${rsha}"
+  echo "pre-push: ${lref} ${lsha} -> ${rref} ${rsha}" >> "$ATTEMPT_LOG"
+done
+
+audit "RESULT   pushed  ${ATTEMPT_ID}"
+echo "pre-push: push audited (see $AUDIT_LOG)" >&2
+exit 0

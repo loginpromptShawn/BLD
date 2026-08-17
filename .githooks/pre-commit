@@ -1,22 +1,55 @@
 #!/usr/bin/env bash
 #
-# pre-commit hook: run all tests before every commit.
+# pre-commit: run all tests before every commit.
+#   - If any test fails, the commit is ABORTED (non-zero exit).
+#   - Every attempt (pass or fail) is audited: a summary line in
+#       <git-dir>/hook-audit.log  and the full test output in
+#       <git-dir>/hook-logs/<attempt-id>.log  for later review.
 #
-# If any test fails, the commit is ABORTED (non-zero exit).
-# Runs on ALL branches, testing the branch's working tree / staged state.
-#
-# Enable with:  git config core.hooksPath .githooks
-set -e
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib.sh"
 
 BRANCH="$(git branch --show-current)"
-echo "pre-commit: running all tests on branch '$BRANCH'..."
-echo
+STAGED="$(git diff --cached --name-only)"
+USER_NAME="$(git config user.name) <$(git config user.email)>"
 
-# 1) Unit tests — this runner exits nonzero on any failure.
-"${PWD}/.venv/bin/python" tests/test_songlocator.py
+begin_attempt
 
-# 2) BDD tests — behave exits nonzero on any failing scenario.
-"${PWD}/.venv/bin/python" -m behave
+# --- Audit index header ------------------------------------------------------
+audit_rule
+audit "EVENT    pre-commit  attempt=${ATTEMPT_ID}"
+audit "BRANCH   $BRANCH"
+audit "USER     $USER_NAME"
+audit "STAGED   $(printf '%s' "$STAGED" | tr '\n' ';')"
 
-echo
-echo "pre-commit: all tests passed -> commit allowed ✔"
+echo "pre-commit: running all tests on branch '$BRANCH' (full log: $ATTEMPT_LOG)"
+echo "=== pre-commit attempt ${ATTEMPT_ID} on branch '${BRANCH}' ===" >> "$ATTEMPT_LOG"
+echo "staged: $(printf '%s' "$STAGED" | tr '\n' ';')" >> "$ATTEMPT_LOG"
+
+# --- 1) unit tests -----------------------------------------------------------
+echo "--- unit: python tests/test_songlocator.py ---" >> "$ATTEMPT_LOG"
+"${PWD}/.venv/bin/python" tests/test_songlocator.py >> "$ATTEMPT_LOG" 2>&1
+unit_rc=$?
+
+# --- 2) BDD tests ------------------------------------------------------------
+echo "--- bdd: python -m behave ---" >> "$ATTEMPT_LOG"
+"${PWD}/.venv/bin/python" -m behave >> "$ATTEMPT_LOG" 2>&1
+bdd_rc=$?
+
+echo "--- unit exit: $unit_rc | bdd exit: $bdd_rc ---" >> "$ATTEMPT_LOG"
+
+# --- Decide + record ---------------------------------------------------------
+if [ "$unit_rc" -eq 0 ] && [ "$bdd_rc" -eq 0 ]; then
+  audit "RESULT   PASS  commit allowed  log=${ATTEMPT_LOG}"
+  echo "pre-commit: all tests passed -> commit allowed ✔"
+  exit 0
+else
+  audit "RESULT   FAIL  commit ABORTED  log=${ATTEMPT_LOG}"
+  echo "pre-commit: tests FAILED -> commit aborted" >&2
+  echo "--- last lines from $ATTEMPT_LOG ---" >&2
+  tail -n 6 "$ATTEMPT_LOG" >&2
+  exit 1
+fi
+
